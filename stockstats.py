@@ -424,6 +424,46 @@ def generate_report(codes: list, years: int = 8,
             # PB公式 = 收盘价/每股净资产
             ws.cell(row=row_num, column=7).value = f'=IF(D{row_num}>0,B{row_num}/D{row_num},"")'
             row_num += 1
+        
+        # 在原始数据页添加3个Excel图表（股价/PE/PB）
+        from openpyxl.chart import LineChart, Reference
+        
+        # 股价图
+        chart_p = LineChart()
+        chart_p.title = f"{code} 股价走势"
+        chart_p.style = 10
+        chart_p.width = 18
+        chart_p.height = 10
+        data_p = Reference(ws, min_col=2, min_row=1, max_row=row_num-1)
+        cats = Reference(ws, min_col=1, min_row=2, max_row=row_num-1)
+        chart_p.add_data(data_p, titles_from_data=True)
+        chart_p.set_categories(cats)
+        chart_p.y_axis.title = "价格（元）"
+        ws.add_chart(chart_p, "I1")
+        
+        # PE图
+        chart_pe = LineChart()
+        chart_pe.title = f"{code} PE走势"
+        chart_pe.style = 10
+        chart_pe.width = 18
+        chart_pe.height = 10
+        data_pe = Reference(ws, min_col=6, min_row=1, max_row=row_num-1)
+        chart_pe.add_data(data_pe, titles_from_data=True)
+        chart_pe.set_categories(cats)
+        chart_pe.y_axis.title = "PE"
+        ws.add_chart(chart_pe, "I19")
+        
+        # PB图
+        chart_pb = LineChart()
+        chart_pb.title = f"{code} PB走势"
+        chart_pb.style = 10
+        chart_pb.width = 18
+        chart_pb.height = 10
+        data_pb = Reference(ws, min_col=7, min_row=1, max_row=row_num-1)
+        chart_pb.add_data(data_pb, titles_from_data=True)
+        chart_pb.set_categories(cats)
+        chart_pb.y_axis.title = "PB"
+        ws.add_chart(chart_pb, "I37")
     
     writer.close()
     return output
