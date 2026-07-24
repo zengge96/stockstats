@@ -26,7 +26,7 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --onefile --name stockstats stockstats.py
+          pyinstaller --onefile --name stockstats --collect-data akshare stockstats.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -50,7 +50,7 @@ jobs:
             bash -c "
               apt-get update -qq && apt-get install -y -qq binutils &&
               pip install pyinstaller akshare openpyxl pandas --break-system-packages &&
-              pyinstaller --onefile --name stockstats stockstats.py &&
+              pyinstaller --onefile --name stockstats --collect-data akshare stockstats.py &&
               chmod 755 dist/stockstats
             "
 
