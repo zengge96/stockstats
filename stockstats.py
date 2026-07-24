@@ -413,20 +413,23 @@ def generate_report(codes: list, years: int = 8,
             if not known_eps or known_eps <= 0:
                 continue
             
-            # 写入原始数据
-            ws.cell(row=row_num, column=1, value=d['day'])
+            # 【修复1：X轴】将字符串转换为日期对象，Excel图表才能自动优化X轴刻度
+            date_obj = datetime.strptime(d['day'], '%Y-%m-%d').date()
+            cell_date = ws.cell(row=row_num, column=1, value=date_obj)
+            cell_date.number_format = 'yyyy-mm-dd'
+            
             ws.cell(row=row_num, column=2, value=close)
             ws.cell(row=row_num, column=3, value=known_eps)
             ws.cell(row=row_num, column=4, value=known_nav if known_nav else '')
             ws.cell(row=row_num, column=5, value=float(d.get('volume', 0)))
-            # PE公式 = 收盘价/EPS
-            ws.cell(row=row_num, column=6).value = f'=IF(C{row_num}>0,B{row_num}/C{row_num},"")'
-            # PB公式 = 收盘价/每股净资产
-            ws.cell(row=row_num, column=7).value = f'=IF(D{row_num}>0,B{row_num}/D{row_num},"")'
+            
+            # 【修复2：Y轴】将公式中可能返回的 "" 改为 NA()，Excel会自动忽略 #N/A 错误，保持完美的坐标轴缩放
+            ws.cell(row=row_num, column=6).value = f'=IF(C{row_num}>0,B{row_num}/C{row_num},NA())'
+            ws.cell(row=row_num, column=7).value = f'=IF(D{row_num}>0,B{row_num}/D{row_num},NA())'
             row_num += 1
         
         
-        # 3个Excel图表（最小化配置）
+        # 3个Excel图表（修复并优化配置）
         from openpyxl.chart import LineChart, Reference
         d2 = Reference(ws, min_col=2, min_row=1, max_row=row_num-1)
         d6 = Reference(ws, min_col=6, min_row=1, max_row=row_num-1)
@@ -436,9 +439,16 @@ def generate_report(codes: list, years: int = 8,
         c1 = LineChart(); c1.title = f"股价走势"; c1.add_data(d2, titles_from_data=True); c1.set_categories(cats)
         c2 = LineChart(); c2.title = f"PE走势"; c2.add_data(d6, titles_from_data=True); c2.set_categories(cats)
         c3 = LineChart(); c3.title = f"PB走势"; c3.add_data(d7, titles_from_data=True); c3.set_categories(cats)
+        
+        # 优化图表样式（样式2线条更清晰）
+        c1.style = 2
+        c2.style = 2
+        c3.style = 2
+
         ws.add_chart(c1, "I1")
         ws.add_chart(c2, "I19")
         ws.add_chart(c3, "I37")
+        
     writer.close()
     return output
 
