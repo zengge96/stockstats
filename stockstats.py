@@ -3,6 +3,7 @@
 import sys, os, argparse, json, urllib.request, statistics, tempfile
 from datetime import datetime, timedelta
 import pandas as pd
+import openpyxl
 import akshare as ak
 
 __version__ = "0.1.0"
@@ -379,7 +380,7 @@ def generate_report(codes: list, years: int = 8,
     df_summary['代码'] = df_summary['代码'].astype(str)
     df_summary.to_excel(writer, sheet_name='统计总表', index=False)
     
-    # Sheet 2+: 每个代码原始数据
+    # Sheet 2+: 每个代码原始数据(用Excel公式计算PE/PB)
     for code in codes:
         prefix = detect_prefix(code)
         daily_all = get_price_history(code, prefix)
@@ -391,24 +392,38 @@ def generate_report(codes: list, years: int = 8,
         if not eps_map:
             continue
         
-        latest_eps = eps_map.get(max(eps_map.keys()))
-        latest_nav = nav_map.get(max(nav_map.keys()))
+        # 用openpyxl直接写原始数据+公式
+        from openpyxl import Workbook
+        sheet_name = f'原始_{code}'
+        ws = writer.book.create_sheet(title=sheet_name[:31])  # Excel sheet名最长31字符
         
-        records = []
+        headers = ['日期', '收盘价', 'EPS', '每股净资产', '成交量', 'PE', 'PB']
+        for j, h in enumerate(headers):
+            cell = ws.cell(row=1, column=j+1)
+            cell.value = h
+            cell.font = openpyxl.styles.Font(bold=True)
+        
+        row_num = 2
         for d in daily_all[-2500:]:
             close = float(d['close'])
             yr = int(d['day'][:4])
             known_eps = eps_map.get(yr - 1) or eps_map.get(yr)
             known_nav = nav_map.get(yr - 1) or nav_map.get(yr)
-            pe = round(close / known_eps, 2) if known_eps and known_eps > 0 else None
-            pb = round(close / known_nav, 2) if known_nav and known_nav > 0 else None
-            if pe and 5 < pe < 80:
-                records.append({'日期': d['day'], '收盘价': close, 'PE': pe, 'PB': pb})
-        
-        df_raw = pd.DataFrame(records)
-        if not df_raw.empty:
-            sheet_name = f'原始_{code}'
-            df_raw.to_excel(writer, sheet_name=sheet_name, index=False)
+            
+            if not known_eps or known_eps <= 0:
+                continue
+            
+            # 写入原始数据
+            ws.cell(row=row_num, column=1, value=d['day'])
+            ws.cell(row=row_num, column=2, value=close)
+            ws.cell(row=row_num, column=3, value=known_eps)
+            ws.cell(row=row_num, column=4, value=known_nav if known_nav else '')
+            ws.cell(row=row_num, column=5, value=float(d.get('volume', 0)))
+            # PE公式 = 收盘价/EPS
+            ws.cell(row=row_num, column=6).value = f'=IF(C{row_num}>0,B{row_num}/C{row_num},"")'
+            # PB公式 = 收盘价/每股净资产
+            ws.cell(row=row_num, column=7).value = f'=IF(D{row_num}>0,B{row_num}/D{row_num},"")'
+            row_num += 1
     
     writer.close()
     return output
@@ -451,9 +466,27 @@ def main():
     print(f"周期: {args.years}年")
     if block_years:
         print(f"屏蔽: {sorted(block_years)}")
+    print()
     
-    out_path = generate_report(
-        args.codes, years=args.years,
+    results = analyze_multiple(args.codes, args.years, block_years)
+    
+    # 控制台输出统计总表
+    print(f"{'代码':>6} {'名称':<10} {'PE':>6} {'P%':>6} {'均值':>6} {'PB':>6} {'ROE':>5} {'股息率':>6}")
+    print("-" * 55)
+    for r in results:
+        if 'error' in r:
+            print(f"{r.get('code','?'):>6} {r.get('name','?'):<10} ❌ {r.get('error','?')}")
+        else:
+            pe = f"{r.get('current_pe',0):.1f}x" if r.get('current_pe') else 'N/A'
+            pp = f"P{r.get('pe_percentile',0):.0f}" if r.get('pe_percentile') is not None else 'N/A'
+            pm = f"{r.get('pe_mean',0):.1f}x" if r.get('pe_mean') else 'N/A'
+            pb = f"{r.get('current_pb',0):.1f}x" if r.get('current_pb') else 'N/A'
+            ro = f"{r.get('roe',0):.1f}%" if r.get('roe') else 'N/A'
+            dr = f"{r.get('dividend_rate',0):.1f}%" if r.get('dividend_rate') else 'N/A'
+            print(f"{r['code']:>6} {r['name']:<10} {pe:>6} {pp:>6} {pm:>6} {pb:>6} {ro:>5} {dr:>6}")
+    print()
+    
+    out_path = generate_report(args.codes, years=args.years,
         block_years=block_years, output=args.output
     )
     print(f"✅ 报告已生成: {os.path.abspath(out_path)}")
