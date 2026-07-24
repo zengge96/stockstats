@@ -1,0 +1,97 @@
+name: Build Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.2)'
+        required: true
+        type: string
+
+jobs:
+  build-windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller akshare openpyxl pandas
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --name stockstats stockstats.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stockstats-windows-x64
+          path: dist/stockstats.exe
+
+  build-linux-arm:
+    name: Build Linux ARM64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build in ARM64 container
+        run: |
+          docker run --platform linux/arm64 -v ${{ github.workspace }}:/src -w /src \
+            python:3.12-slim-bookworm \
+            bash -c "
+              pip install pyinstaller akshare openpyxl pandas --break-system-packages &&
+              pyinstaller --onefile --name stockstats stockstats.py &&
+              chmod 755 dist/stockstats
+            "
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stockstats-linux-arm64
+          path: dist/stockstats
+
+  create-release:
+    name: Create Release
+    needs: [build-windows, build-linux-arm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ inputs.tag }}
+          name: stockstats ${{ inputs.tag }}
+          body: |
+            ## stockstats ${{ inputs.tag }}
+
+            ### 二进制文件
+            - **stockstats-windows-x64.exe** — Windows 64位可执行文件
+            - **stockstats-linux-arm64** — Linux ARM64 可执行文件（树莓派/飞腾等）
+
+            ### 使用方式
+            ```bash
+            # Linux ARM64
+            chmod +x stockstats-linux-arm64
+            ./stockstats-linux-arm64 600036 -y 10 -o 招行报告
+
+            # Windows
+            stockstats-windows-x64.exe 600036 -y 10 -o 招行报告
+            ```
+          artifacts: artifacts/stockstats-windows-x64/stockstats.exe,artifacts/stockstats-linux-arm64/stockstats
