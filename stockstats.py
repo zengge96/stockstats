@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """stockstats — A股区间统计工具 (PE/PB百分位分析)"""
 import sys, os, argparse, json, urllib.request, statistics, tempfile
+from datetime import datetime, timedelta
 import pandas as pd
 import akshare as ak
 
@@ -116,31 +117,30 @@ def get_current_dividend_rate(code: str) -> float:
 # ===================== PE/PB计算 =====================
 def get_price_history(code: str, prefix: str, max_days: int = 2500) -> list:
     """获取日线数据（akshare不复权）"""
-    try:
-        df = ak.stock_zh_a_hist(
-            symbol=code, period="daily",
-            start_date="20160101", end_date="20260723",
-            adjust=""  # 不复权, PE计算必须用原始价格
-        )
-        records = []
-        for _, row in df.iterrows():
-            records.append({
-                'day': row['日期'].strftime('%Y-%m-%d'),
-                'close': float(row['收盘']),
-                'open': float(row['开盘']),
-                'high': float(row['最高']),
-                'low': float(row['最低']),
-                'volume': float(row['成交量']),
-            })
-        return records[-max_days:] if len(records) > max_days else records
-    except Exception:
-        # fallback: 新浪日线
+    end = datetime.now()
+    start = end - timedelta(days=max_days + 365)
+    for attempt in range(3):  # 重试3次
         try:
-            url = (f"https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-                   f"CN_MarketData.getKLineData?symbol={prefix}{code}&scale=240&ma=no&datalen={max_days}")
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                return json.loads(resp.read().decode('utf-8'))
+            df = ak.stock_zh_a_hist(
+                symbol=code, period="daily",
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+            )
+            records = []
+            for _, row in df.iterrows():
+                records.append({
+                    'day': row['日期'].strftime('%Y-%m-%d'),
+                    'close': float(row['收盘']),
+                    'open': float(row['开盘']),
+                    'high': float(row['最高']),
+                    'low': float(row['最低']),
+                    'volume': float(row['成交量']),
+                })
+            return records[-max_days:] if len(records) > max_days else records
         except Exception:
+            if attempt < 2:
+                import time; time.sleep(2)
+                continue
             return []
 
 
