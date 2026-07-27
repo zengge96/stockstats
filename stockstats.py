@@ -54,7 +54,8 @@ def analyze_index(code: str, years: int = 8) -> dict:
     
     # 从CSIndex获取历史PE数据
     try:
-        df = ak.stock_zh_index_hist_csindex(symbol=idx_code)
+        today_str = datetime.now().strftime("%Y%m%d")
+        df = ak.stock_zh_index_hist_csindex(symbol=idx_code, end_date=today_str)
     except Exception:
         return {'code': code, 'name': code, 'error': 'CSIndex暂无此指数数据'}
     
@@ -67,14 +68,33 @@ def analyze_index(code: str, years: int = 8) -> dict:
     if len(pes) < 20:
         return {'code': code, 'name': name, 'error': '历史PE数据不足'}
     
+    # 尝试通过新浪指数行情获取最新PE(指数字段33? 不同指数可能不同)
+    latest_pe = None
+    latest_date = None
+    try:
+        prefix = 'sh' if idx_code.startswith(('6','9','0')) else 'sz'
+        url = f'https://hq.sinajs.cn/list={prefix}{idx_code}'
+        req = urllib.request.Request(url, headers={'Referer':'https://finance.sina.com.cn'})
+        resp = urllib.request.urlopen(req, timeout=5)
+        t = resp.read().decode('gbk')
+        parts = t.split(',')
+        # 新浪指数field[30]=日期
+        if len(parts) > 30:
+            d = parts[30].strip().replace('"','')
+            if d and d.count('-') == 2:
+                latest_date = d
+    except Exception:
+        pass
+    
     # 截取指定年数
     n = min(years * 250, len(pes))
     recent_pes = pes.tail(n)
     
-    # 计算日期范围（从原始DataFrame取日期列）
-    date_end = df['日期'].iloc[-1]
+    # 计算日期范围(用实时日期覆盖历史尾值)
+    date_end = latest_date if latest_date else df['日期'].iloc[-1]
     date_start = df['日期'].iloc[-min(n, len(df))] if n < len(df) else df['日期'].iloc[0]
     
+    # 当前PE仍用历史数据最后值(因为没有PE字段)
     current_pe = float(recent_pes.iloc[-1])
     pe_sorted = sorted(recent_pes)
     pe_percentile = round(sum(1 for p in recent_pes if p < current_pe) / len(recent_pes) * 100, 1)
