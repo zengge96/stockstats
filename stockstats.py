@@ -71,6 +71,10 @@ def analyze_index(code: str, years: int = 8) -> dict:
     n = min(years * 250, len(pes))
     recent_pes = pes.tail(n)
     
+    # 计算日期范围（从原始DataFrame取日期列）
+    date_end = df['日期'].iloc[-1]
+    date_start = df['日期'].iloc[-min(n, len(df))] if n < len(df) else df['日期'].iloc[0]
+    
     current_pe = float(recent_pes.iloc[-1])
     pe_sorted = sorted(recent_pes)
     pe_percentile = round(sum(1 for p in recent_pes if p < current_pe) / len(recent_pes) * 100, 1)
@@ -78,7 +82,7 @@ def analyze_index(code: str, years: int = 8) -> dict:
     result = {
         'code': code,
         'name': name,
-        '统计区间': f'{recent_pes.index[0]} ~ {recent_pes.index[-1]}',
+        '统计区间': f'{date_start} ~ {date_end}',
         'trading_days': len(recent_pes),
         'current_pe': round(current_pe, 2),
         'pe_percentile': pe_percentile,
