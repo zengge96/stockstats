@@ -485,72 +485,93 @@ def generate_report(codes: list, years: int = 8,
     
     # Sheet 2+: 每个代码原始数据(用Excel公式计算PE/PB)
     for code in codes:
+        from openpyxl import Workbook
+        from openpyxl.chart import LineChart, Reference
+        sheet_name = f'原始_{code}'
+        ws = writer.book.create_sheet(title=sheet_name[:31])
+        
         prefix = detect_prefix(code)
         daily_all = get_price_history(code, prefix)
-        if not daily_all:
-            continue
+        eps_map = get_annual_eps(code) if not is_etf_code(code) else None
+        nav_map = get_annual_nav(code) if not is_etf_code(code) else None
         
-        eps_map = get_annual_eps(code)
-        nav_map = get_annual_nav(code)
-        if not eps_map:
-            continue
-        
-        # 用openpyxl直接写原始数据+公式
-        from openpyxl import Workbook
-        sheet_name = f'原始_{code}'
-        ws = writer.book.create_sheet(title=sheet_name[:31])  # Excel sheet名最长31字符
-        
-        headers = ['日期', '收盘价', 'EPS', '每股净资产', '成交量', 'PE', 'PB']
-        for j, h in enumerate(headers):
-            cell = ws.cell(row=1, column=j+1)
-            cell.value = h
-            cell.font = openpyxl.styles.Font(bold=True)
-        
-        row_num = 2
-        for d in daily_all[-2500:]:
-            close = float(d['close'])
-            yr = int(d['day'][:4])
-            known_eps = eps_map.get(yr - 1) or eps_map.get(yr)
-            known_nav = nav_map.get(yr - 1) or nav_map.get(yr)
-            
-            if not known_eps or known_eps <= 0:
+        if is_etf_code(code) and code in ETF_INDEX_MAP and ETF_INDEX_MAP[code]:
+            # === ETF分支: 用CSIndex原始PE数据 ===
+            try:
+                today_str = datetime.now().strftime('%Y%m%d')
+                df_idx = ak.stock_zh_index_hist_csindex(symbol=ETF_INDEX_MAP[code], end_date=today_str)
+            except Exception:
                 continue
             
-            # 【修复1：X轴】将字符串转换为日期对象，Excel图表才能自动优化X轴刻度
-            date_obj = datetime.strptime(d['day'], '%Y-%m-%d').date()
-            cell_date = ws.cell(row=row_num, column=1, value=date_obj)
-            cell_date.number_format = 'yyyy-mm-dd'
+            if df_idx.empty or '滚动市盈率' not in df_idx.columns:
+                continue
             
-            ws.cell(row=row_num, column=2, value=close)
-            ws.cell(row=row_num, column=3, value=known_eps)
-            ws.cell(row=row_num, column=4, value=known_nav if known_nav else '')
-            ws.cell(row=row_num, column=5, value=float(d.get('volume', 0)))
+            headers = ['日期', '指数收盘', '滚动市盈率']
+            for j, h in enumerate(headers):
+                cell = ws.cell(row=1, column=j+1)
+                cell.value = h
+                cell.font = openpyxl.styles.Font(bold=True)
             
-            # 【修复2：Y轴】将公式中可能返回的 "" 改为 NA()，Excel会自动忽略 #N/A 错误，保持完美的坐标轴缩放
-            ws.cell(row=row_num, column=6).value = f'=IF(C{row_num}>0,B{row_num}/C{row_num},NA())'
-            ws.cell(row=row_num, column=7).value = f'=IF(D{row_num}>0,B{row_num}/D{row_num},NA())'
-            row_num += 1
-        
-        
-        # 3个Excel图表（修复并优化配置）
-        from openpyxl.chart import LineChart, Reference
-        d2 = Reference(ws, min_col=2, min_row=1, max_row=row_num-1)
-        d6 = Reference(ws, min_col=6, min_row=1, max_row=row_num-1)
-        d7 = Reference(ws, min_col=7, min_row=1, max_row=row_num-1)
-        cats = Reference(ws, min_col=1, min_row=2, max_row=row_num-1)
-        
-        c1 = LineChart(); c1.title = f"股价走势"; c1.add_data(d2, titles_from_data=True); c1.set_categories(cats)
-        c2 = LineChart(); c2.title = f"PE走势"; c2.add_data(d6, titles_from_data=True); c2.set_categories(cats)
-        c3 = LineChart(); c3.title = f"PB走势"; c3.add_data(d7, titles_from_data=True); c3.set_categories(cats)
-        
-        # 优化图表样式（样式2线条更清晰）
-        c1.style = 2
-        c2.style = 2
-        c3.style = 2
-
-        ws.add_chart(c1, "I1")
-        ws.add_chart(c2, "I19")
-        ws.add_chart(c3, "I37")
+            row_num = 2
+            for _, row in df_idx.iterrows():
+                date_obj = row['日期']
+                if hasattr(date_obj, 'strftime'):
+                    cell_date = ws.cell(row=row_num, column=1, value=date_obj)
+                    cell_date.number_format = 'yyyy-mm-dd'
+                ws.cell(row=row_num, column=2, value=row.get('收盘', 0))
+                ws.cell(row=row_num, column=3, value=row.get('滚动市盈率', ''))
+                row_num += 1
+            
+            # PE趋势图
+            d3 = Reference(ws, min_col=3, min_row=1, max_row=row_num-1)
+            cats = Reference(ws, min_col=1, min_row=2, max_row=row_num-1)
+            c = LineChart()
+            c.title = 'PE走势'
+            c.add_data(d3, titles_from_data=True)
+            c.set_categories(cats)
+            c.style = 2
+            ws.add_chart(c, "E1")
+            
+        elif eps_map and daily_all:
+            # === 个股分支: 价格+EPS公式算PE ===
+            headers = ['日期', '收盘价', 'EPS', '每股净资产', '成交量', 'PE', 'PB']
+            for j, h in enumerate(headers):
+                cell = ws.cell(row=1, column=j+1)
+                cell.value = h
+                cell.font = openpyxl.styles.Font(bold=True)
+            
+            row_num = 2
+            for d in daily_all[-2500:]:
+                close = float(d['close'])
+                yr = int(d['day'][:4])
+                known_eps = eps_map.get(yr - 1) or eps_map.get(yr)
+                known_nav = nav_map.get(yr - 1) or nav_map.get(yr)
+                if not known_eps or known_eps <= 0:
+                    continue
+                date_obj = datetime.strptime(d['day'], '%Y-%m-%d').date()
+                cell_date = ws.cell(row=row_num, column=1, value=date_obj)
+                cell_date.number_format = 'yyyy-mm-dd'
+                ws.cell(row=row_num, column=2, value=close)
+                ws.cell(row=row_num, column=3, value=known_eps)
+                ws.cell(row=row_num, column=4, value=known_nav if known_nav else '')
+                ws.cell(row=row_num, column=5, value=float(d.get('volume', 0)))
+                ws.cell(row=row_num, column=6).value = f'=IF(C{row_num}>0,B{row_num}/C{row_num},NA())'
+                ws.cell(row=row_num, column=7).value = f'=IF(D{row_num}>0,B{row_num}/D{row_num},NA())'
+                row_num += 1
+            
+            # 3个图表
+            d2 = Reference(ws, min_col=2, min_row=1, max_row=row_num-1)
+            d6 = Reference(ws, min_col=6, min_row=1, max_row=row_num-1)
+            d7 = Reference(ws, min_col=7, min_row=1, max_row=row_num-1)
+            cats = Reference(ws, min_col=1, min_row=2, max_row=row_num-1)
+            c1 = LineChart(); c1.title = '股价走势'; c1.add_data(d2, titles_from_data=True); c1.set_categories(cats)
+            c2 = LineChart(); c2.title = 'PE走势'; c2.add_data(d6, titles_from_data=True); c2.set_categories(cats)
+            c3 = LineChart(); c3.title = 'PB走势'; c3.add_data(d7, titles_from_data=True); c3.set_categories(cats)
+            c1.style = 2; c2.style = 2; c3.style = 2
+            ws.add_chart(c1, "I1"); ws.add_chart(c2, "I19"); ws.add_chart(c3, "I37")
+        else:
+            # 无数据
+            ws.cell(row=1, column=1, value='无原始数据')
         
     writer.close()
     return output
