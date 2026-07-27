@@ -23,6 +23,78 @@ def detect_prefix(code: str) -> str:
 
 
 # ===================== 财务数据提取 =====================
+# ===================== ETF/指数代码映射 =====================
+ETF_INDEX_MAP = {
+    # 常见A股ETF -> 底层中证指数代码
+    '159928': '000932',  # 消费ETF -> 中证主要消费
+    '512890': '930955',  # 红利低波ETF -> 红利低波100
+    '515080': '000922',  # 中证红利ETF -> 中证红利
+    '513630': None,       # 港股低波红利ETF (S&P指数,不在CSIndex)
+    '510050': '000016',  # 上证50ETF -> 上证50
+    '510300': '000300',  # 沪深300ETF -> 沪深300
+    '510500': '000905',  # 中证500ETF -> 中证500
+    '159915': '399006',  # 创业板ETF -> 创业板指
+}
+
+
+def is_etf_code(code: str) -> bool:
+    """判断是否为ETF代码(以1/5开头)"""
+    return code.startswith(('1', '5'))
+
+
+def analyze_index(code: str, years: int = 8) -> dict:
+    """
+    用CSIndex分析指数/ETF的PE和百分位。
+    返回同 analyze_stock 兼容的字典。
+    """
+    idx_code = ETF_INDEX_MAP.get(code)
+    if not idx_code:
+        return {'code': code, 'name': code, 'error': '不支持的ETF代码'}
+    
+    # 从CSIndex获取历史PE数据
+    try:
+        df = ak.stock_zh_index_hist_csindex(symbol=idx_code)
+    except Exception:
+        return {'code': code, 'name': code, 'error': 'CSIndex暂无此指数数据'}
+    
+    if df.empty or '滚动市盈率' not in df.columns:
+        return {'code': code, 'name': code, 'error': '无历史PE数据'}
+    
+    name = df['指数中文简称'].iloc[0]
+    pes = df['滚动市盈率'].dropna()
+    
+    if len(pes) < 20:
+        return {'code': code, 'name': name, 'error': '历史PE数据不足'}
+    
+    # 截取指定年数
+    n = min(years * 250, len(pes))
+    recent_pes = pes.tail(n)
+    
+    current_pe = float(recent_pes.iloc[-1])
+    pe_sorted = sorted(recent_pes)
+    pe_percentile = round(sum(1 for p in recent_pes if p < current_pe) / len(recent_pes) * 100, 1)
+    
+    result = {
+        'code': code,
+        'name': name,
+        '统计区间': f'{recent_pes.index[0]} ~ {recent_pes.index[-1]}',
+        'trading_days': len(recent_pes),
+        'current_pe': round(current_pe, 2),
+        'pe_percentile': pe_percentile,
+        'pe_mean': round(float(recent_pes.mean()), 2),
+        'pe_median': round(float(recent_pes.median()), 2),
+        'pe_high': round(float(recent_pes.max()), 2),
+        'pe_low': round(float(recent_pes.min()), 2),
+        # ETF没有EPS/NAV,无法算分位价和PB
+        'pe_median_price': None, 'pe_75_price': None, 'pe_25_price': None,
+        'current_pb': None, 'pb_percentile': None,
+        'pb_mean': None, 'pb_median': None, 'pb_high': None, 'pb_low': None,
+        'pb_median_price': None, 'pb_75_price': None, 'pb_25_price': None,
+        'dividend_rate': None, 'roe': None,
+    }
+    return result
+
+
 def get_annual_eps(code: str) -> dict:
     """
     从 stock_financial_abstract 提取年报EPS。
@@ -333,7 +405,13 @@ def analyze_stock(code: str, years: int = 8, block_years: set = None) -> dict:
 
 # ===================== 多股票 =====================
 def analyze_multiple(codes: list, years: int = 8, block_years: set = None) -> list:
-    return [analyze_stock(c, years, block_years) for c in codes]
+    results = []
+    for c in codes:
+        if is_etf_code(c):
+            results.append(analyze_index(c, years))
+        else:
+            results.append(analyze_stock(c, years, block_years))
+    return results
 
 
 # ===================== Excel报告 =====================
