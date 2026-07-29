@@ -93,6 +93,10 @@ def analyze_etf(code: str, years: int = 8) -> dict:
     idx_code = lookup_etf_index(code)
     if not idx_code:
         return {'code': code, 'name': code, 'error': '查不到跟踪指数'}
+    # 用腾讯行情拿ETF原始名称
+    fund_code = code.upper().rstrip('.ETF') if is_etf_fund(code) else code
+    fund_prefix = detect_prefix(fund_code)
+    etf_name = get_stock_name(fund_code, fund_prefix)
     # 用CSIndex查底层指数的PE
     try:
         today_str = datetime.now().strftime('%Y%m%d')
@@ -101,7 +105,7 @@ def analyze_etf(code: str, years: int = 8) -> dict:
         return {'code': code, 'name': code, 'error': 'CSIndex暂无此指数数据'}
     if df.empty or '滚动市盈率' not in df.columns:
         return {'code': code, 'name': code, 'error': '无历史PE数据'}
-    name = df['指数中文简称'].iloc[0]
+    name = etf_name if etf_name and etf_name != fund_code else df['指数中文简称'].iloc[0]
     pes = df['滚动市盈率'].dropna()
     if len(pes) < 20:
         return {'code': code, 'name': name, 'error': '历史PE数据不足'}
