@@ -29,6 +29,103 @@ def is_csi_index(code: str) -> bool:
     return code.upper().endswith('.CSI')
 
 
+def is_etf_fund(code: str) -> bool:
+    """判断是否为ETF基金代码(以.ETF结尾)"""
+    return code.upper().endswith('.ETF')
+
+
+# 指数名称 → CSI代码映射(常见指数的硬映射)
+INDEX_NAME_MAP = {
+    '中证主要消费指数': '000932',
+    '中证消费指数': '000932',
+    '中证红利指数': '000922',
+    '中证红利低波动指数': '930955',
+    '中证红利低波100指数': '930955',
+    '中证500指数': '000905',
+    '中证1000指数': '000852',
+    '中证2000指数': '932000',
+    '中证800指数': '000906',
+    '沪深300指数': '000300',
+    '上证50指数': '000016',
+    '上证180指数': '000010',
+    '科创板50指数': '000688',
+    '科创50指数': '000688',
+    '深证红利指数': '399324',
+    '国证红利指数': '399321',
+}
+
+
+def lookup_etf_index(code: str) -> str:
+    """
+    通过天天基金网F10页面查ETF跟踪的指数代码。
+    返回CSI代码字符串，失败返回None。
+    """
+    fund_code = code.upper().rstrip('.ETF') if is_etf_fund(code) else code
+    import subprocess, re
+    try:
+        result = subprocess.run([
+            'curl', '-s', '--connect-timeout', '10',
+            f'https://fundf10.eastmoney.com/jbgk_{fund_code}.html'
+        ], capture_output=True, text=True, timeout=15)
+        html = result.stdout
+        # 方法1: 找跟踪标的表格行
+        m = re.search(r'跟踪标的</td><td[^>]*>([^<]+)</td>', html)
+        idx_name = m.group(1).strip() if m else None
+        if not idx_name:
+            # 方法2: 直接搜中证XXX指数
+            indices = re.findall(r'中证[^<]{2,20}指数', html)
+            # 排除"交易型开放式指数"这种全称中的字段
+            idx_name = next((i for i in set(indices) if '交易' not in i), None)
+        if idx_name and idx_name in INDEX_NAME_MAP:
+            return INDEX_NAME_MAP[idx_name]
+        # 方法3: 搜INDEX_NAME_MAP的部分匹配
+        if idx_name:
+            for name, csi_code in INDEX_NAME_MAP.items():
+                if name in idx_name or idx_name in name:
+                    return csi_code
+    except Exception:
+        pass
+    return None
+
+
+def analyze_etf(code: str, years: int = 8) -> dict:
+    """分析ETF基金(先查跟踪指数,再用CSIndex取PE)"""
+    idx_code = lookup_etf_index(code)
+    if not idx_code:
+        return {'code': code, 'name': code, 'error': '查不到跟踪指数'}
+    # 用CSIndex查底层指数的PE
+    try:
+        today_str = datetime.now().strftime('%Y%m%d')
+        df = ak.stock_zh_index_hist_csindex(symbol=idx_code, end_date=today_str)
+    except Exception:
+        return {'code': code, 'name': code, 'error': 'CSIndex暂无此指数数据'}
+    if df.empty or '滚动市盈率' not in df.columns:
+        return {'code': code, 'name': code, 'error': '无历史PE数据'}
+    name = df['指数中文简称'].iloc[0]
+    pes = df['滚动市盈率'].dropna()
+    if len(pes) < 20:
+        return {'code': code, 'name': name, 'error': '历史PE数据不足'}
+    n = min(years * 250, len(pes))
+    recent = pes.tail(n)
+    current_pe = float(recent.iloc[-1])
+    pe_sorted = sorted(recent)
+    pe_percentile = round(sum(1 for p in recent if p < current_pe) / len(recent) * 100, 1)
+    date_end = df['日期'].iloc[-1]
+    date_start = df['日期'].iloc[-min(n, len(df))] if n < len(df) else df['日期'].iloc[0]
+    return {
+        'code': code, 'name': name, '统计区间': f'{date_start} ~ {date_end}',
+        'trading_days': len(recent),
+        'current_pe': round(current_pe, 2), 'pe_percentile': pe_percentile,
+        'pe_mean': round(float(recent.mean()), 2), 'pe_median': round(float(recent.median()), 2),
+        'pe_high': round(float(recent.max()), 2), 'pe_low': round(float(recent.min()), 2),
+        'pe_median_price': None, 'pe_75_price': None, 'pe_25_price': None,
+        'current_pb': None, 'pb_percentile': None, 'pb_mean': None, 'pb_median': None,
+        'pb_high': None, 'pb_low': None, 'pb_median_price': None, 'pb_75_price': None,
+        'pb_25_price': None,
+        'dividend_rate': None, 'roe': None,
+    }
+
+
 def analyze_index(code: str, years: int = 8) -> dict:
     """
     用CSIndex分析指数/ETF的PE和百分位。
@@ -416,8 +513,10 @@ def analyze_stock(code: str, years: int = 8, block_years: set = None) -> dict:
 def analyze_multiple(codes: list, years: int = 8, block_years: set = None) -> list:
     results = []
     for c in codes:
-        if is_csi_index(c):
-            results.append(analyze_index(c.upper() if not c.endswith('.CSI') else c, years))
+        if is_etf_fund(c):
+            results.append(analyze_etf(c, years))
+        elif is_csi_index(c):
+            results.append(analyze_index(c.upper(), years))
         else:
             results.append(analyze_stock(c, years, block_years))
     return results
@@ -476,14 +575,18 @@ def generate_report(codes: list, years: int = 8,
         
         prefix = detect_prefix(code)
         daily_all = get_price_history(code, prefix)
-        eps_map = get_annual_eps(code) if not is_csi_index(code) else None
-        nav_map = get_annual_nav(code) if not is_csi_index(code) else None
+        is_idx_or_etf = is_csi_index(code) or is_etf_fund(code)
+        eps_map = get_annual_eps(code) if not is_idx_or_etf else None
+        nav_map = get_annual_nav(code) if not is_idx_or_etf else None
         
-        if is_csi_index(code):
-            # === ETF分支: 用CSIndex原始PE数据 ===
+        if is_idx_or_etf:
+            # === 指数/ETF分支: 用CSIndex原始PE数据 ===
             try:
                 today_str = datetime.now().strftime('%Y%m%d')
-                idx_code = code.rstrip('CSI').rstrip('.').rstrip('csi').rstrip('.')
+                if is_etf_fund(code):
+                    idx_code = lookup_etf_index(code) or code
+                else:
+                    idx_code = code.rstrip('.CSI').rstrip('.csi')
                 df_idx = ak.stock_zh_index_hist_csindex(symbol=idx_code, end_date=today_str)
             except Exception:
                 continue
