@@ -23,24 +23,10 @@ def detect_prefix(code: str) -> str:
 
 
 # ===================== 财务数据提取 =====================
-# ===================== ETF/指数代码映射 =====================
-ETF_INDEX_MAP = {
-    # 常见A股ETF -> 底层中证指数代码
-    '159928': '000932',  # 消费ETF -> 中证主要消费
-    '512890': '930955',  # 红利低波ETF -> 红利低波100
-    '515080': '000922',  # 中证红利ETF -> 中证红利
-    '513630': None,       # 港股低波红利ETF (S&P指数,不在CSIndex)
-    '1B0300': '000300',   # 沪深300指数 (申万代码映射)
-    '510050': '000016',  # 上证50ETF -> 上证50
-    '510300': '000300',  # 沪深300ETF -> 沪深300
-    '510500': '000905',  # 中证500ETF -> 中证500
-    '159915': '399006',  # 创业板ETF -> 创业板指
-}
 
-
-def is_etf_code(code: str) -> bool:
-    """判断是否为ETF代码(以1/5开头)"""
-    return code.startswith(('1', '5'))
+def is_csi_index(code: str) -> bool:
+    """判断是否为中证指数代码(以.CSI结尾)"""
+    return code.upper().endswith('.CSI')
 
 
 def analyze_index(code: str, years: int = 8) -> dict:
@@ -48,10 +34,8 @@ def analyze_index(code: str, years: int = 8) -> dict:
     用CSIndex分析指数/ETF的PE和百分位。
     返回同 analyze_stock 兼容的字典。
     """
-    idx_code = ETF_INDEX_MAP.get(code)
-    if not idx_code:
-        return {'code': code, 'name': code, 'error': '不支持的ETF代码'}
-    
+    # 剥离.CSI后缀，传给CSIndex
+    idx_code = code.upper().rstrip('.CSI') if is_csi_index(code) else code
     # 从CSIndex获取历史PE数据
     try:
         today_str = datetime.now().strftime("%Y%m%d")
@@ -432,8 +416,8 @@ def analyze_stock(code: str, years: int = 8, block_years: set = None) -> dict:
 def analyze_multiple(codes: list, years: int = 8, block_years: set = None) -> list:
     results = []
     for c in codes:
-        if is_etf_code(c):
-            results.append(analyze_index(c, years))
+        if is_csi_index(c):
+            results.append(analyze_index(c.upper() if not c.endswith('.CSI') else c, years))
         else:
             results.append(analyze_stock(c, years, block_years))
     return results
@@ -492,14 +476,15 @@ def generate_report(codes: list, years: int = 8,
         
         prefix = detect_prefix(code)
         daily_all = get_price_history(code, prefix)
-        eps_map = get_annual_eps(code) if not is_etf_code(code) else None
-        nav_map = get_annual_nav(code) if not is_etf_code(code) else None
+        eps_map = get_annual_eps(code) if not is_csi_index(code) else None
+        nav_map = get_annual_nav(code) if not is_csi_index(code) else None
         
-        if is_etf_code(code) and code in ETF_INDEX_MAP and ETF_INDEX_MAP[code]:
+        if is_csi_index(code):
             # === ETF分支: 用CSIndex原始PE数据 ===
             try:
                 today_str = datetime.now().strftime('%Y%m%d')
-                df_idx = ak.stock_zh_index_hist_csindex(symbol=ETF_INDEX_MAP[code], end_date=today_str)
+                idx_code = code.rstrip('CSI').rstrip('.').rstrip('csi').rstrip('.')
+                df_idx = ak.stock_zh_index_hist_csindex(symbol=idx_code, end_date=today_str)
             except Exception:
                 continue
             
