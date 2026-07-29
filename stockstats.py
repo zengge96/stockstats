@@ -34,7 +34,7 @@ def is_etf_fund(code: str) -> bool:
     return code.upper().endswith('.ETF')
 
 
-# 指数名称 → CSI代码映射(常见指数的硬映射)
+# 指数名称 → CSI代码映射
 INDEX_NAME_MAP = {
     '中证主要消费指数': '000932',
     '中证消费指数': '000932',
@@ -52,6 +52,8 @@ INDEX_NAME_MAP = {
     '科创50指数': '000688',
     '深证红利指数': '399324',
     '国证红利指数': '399321',
+    '创业板指数': '399006',
+    '创业板指': '399006',
 }
 
 
@@ -69,16 +71,20 @@ def lookup_etf_index(code: str) -> str:
         ], capture_output=True, text=True, timeout=15)
         html = result.stdout
         # 方法1: 找跟踪标的表格行
-        m = re.search(r'跟踪标的</td><td[^>]*>([^<]+)</td>', html)
+        m = re.search(r'跟踪标的</th[^>]*>[^<]*<td[^>]*>([^<]+)</td>', html)
         idx_name = m.group(1).strip() if m else None
         if not idx_name:
-            # 方法2: 直接搜中证XXX指数
-            indices = re.findall(r'中证[^<]{2,20}指数', html)
-            # 排除"交易型开放式指数"这种全称中的字段
-            idx_name = next((i for i in set(indices) if '交易' not in i), None)
+            # 方法2: 搜各种格式的指数名
+            for prefix in ['中证','上证','沪深','深圳','创业板','深证','国证']:
+                indices = re.findall(rf'{prefix}[^<]{{2,20}}指数', html)
+                for i in set(indices):
+                    if '交易' not in i and '作为' not in i:
+                        idx_name = i
+                        break
+                if idx_name:
+                    break
         if idx_name and idx_name in INDEX_NAME_MAP:
             return INDEX_NAME_MAP[idx_name]
-        # 方法3: 搜INDEX_NAME_MAP的部分匹配
         if idx_name:
             for name, csi_code in INDEX_NAME_MAP.items():
                 if name in idx_name or idx_name in name:
