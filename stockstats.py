@@ -307,7 +307,7 @@ def get_current_dividend_rate(code: str) -> float:
 def get_price_history(code: str, prefix: str, max_days: int = 2500) -> list:
     """获取日线数据（新浪API）"""
     url = (
-        f"https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        f"https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
         f"CN_MarketData.getKLineData?symbol={prefix}{code}&scale=240&ma=no&datalen={max_days}"
     )
     try:
