@@ -356,12 +356,14 @@ def compute_pe_pb_history(daily_all: list, eps_map: dict, nav_map: dict,
         
         # PE: 前一年EPS
         known_eps = eps_map.get(year - 1) or eps_map.get(year)
-        if known_eps and known_eps > 0 and 2 < close / known_eps < 80:
+        # PE: 下限0, 无上限 (原2<PE<80截断了银行股3~5x等低PE历史)
+        if known_eps and known_eps > 0 and close / known_eps >= 0:
             pe_history.append(close / known_eps)
         
         # PB: 前一年NAV
         known_nav = nav_map.get(year - 1) or nav_map.get(year)
-        if known_nav and known_nav > 0 and 0.3 < close / known_nav < 20:
+        # PB: 下限0, 无上限
+        if known_nav and known_nav > 0 and close / known_nav >= 0:
             pb_history.append(close / known_nav)
     
     if date_range is None and len(daily_all) >= 2:
